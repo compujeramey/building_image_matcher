@@ -221,7 +221,13 @@ class Building_Featured_Image_Importer {
             foreach ($query->posts as $post) {
                 $log = get_post_meta($post->ID, 'assigned_featured_image_log', true);
                 $image_id = $log['attachment_id'] ?? null;
-                $image = $image_id ? wp_get_attachment_image($image_id, 'thumbnail') : '—';
+                if ($image_id) {
+                    $thumb = wp_get_attachment_image($image_id, 'thumbnail');
+                    $image_title = esc_html(get_the_title($image_id));
+                    $image = "{$thumb}<br><small>{$image_title}</small>";
+                } else {
+                    $image = '—';
+                }
                 $tag = $log['tag'] ?? '—';
                 $time = $log['time'] ?? '—';
                 $confirm_url = admin_url("admin.php?page=building-image-log&confirm_log={$post->ID}");
@@ -229,7 +235,11 @@ class Building_Featured_Image_Importer {
                 $manual_url = admin_url("admin.php?page=building-image-log&select={$post->ID}");
 
                 echo "<tr>
-                        <td><a href='" . get_edit_post_link($post->ID) . "'>" . esc_html($post->post_title) . "</a></td>
+                        <td>
+                            <a href='" . get_edit_post_link($post->ID) . "'>" . esc_html($post->post_title) . "</a>
+                            <br><a href='" . get_permalink($post->ID) . "' target='_blank'>(view)</a>
+                        </td>
+
                         <td>{$image}</td>
                         <td><code>{$tag}</code></td>
                         <td>{$time}</td>
