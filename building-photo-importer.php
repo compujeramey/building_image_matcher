@@ -63,6 +63,38 @@ class Building_Featured_Image_Importer {
         echo "</div>";
     }
 
+    private function find_existing_media_by_hash($filename, $source_path) {
+        if (!file_exists($source_path)) return false;
+
+        $source_hash = sha1_file($source_path);
+        if (!$source_hash) return false;
+
+        $args = [
+            'post_type'   => 'attachment',
+            'post_status' => 'inherit',
+            'meta_query'  => [
+                [
+                    'key'     => '_wp_attached_file',
+                    'value'   => $filename,
+                    'compare' => 'LIKE'
+                ]
+            ]
+        ];
+
+        $query = new WP_Query($args);
+        if (!$query->have_posts()) return false;
+
+        foreach ($query->posts as $attachment) {
+            $existing_path = get_attached_file($attachment->ID);
+            if (file_exists($existing_path) && sha1_file($existing_path) === $source_hash) {
+                return $attachment->ID;
+            }
+        }
+
+        return false;
+    }
+
+
     public function log_page() {
         echo "<div class='wrap'><h1>Assignment Log</h1>";
         global $wpdb;
@@ -88,7 +120,7 @@ class Building_Featured_Image_Importer {
                     $upload_dir = wp_upload_dir();
                     $dest_path = $upload_dir['path'] . '/' . $filename;
 
-                    $existing_id = $this->find_existing_media_by_filename($filename, $source_path);
+                    $existing_id = $this->find_existing_media_by_hash($filename, $source_path);
                     if ($existing_id) {
                         set_post_thumbnail($pid, $existing_id);
                         update_post_meta($pid, 'assigned_featured_image_log', [
@@ -267,35 +299,6 @@ class Building_Featured_Image_Importer {
         return admin_url("admin.php?page=building-image-importer&batch={$batch}&paged=" . ($paged + 1));
     }
 
-    private function find_existing_media_by_filename($filename, $source_path) {
-        $args = [
-            'post_type'   => 'attachment',
-            'post_status' => 'inherit',
-            'meta_query'  => [
-                [
-                    'key'     => '_wp_attached_file',
-                    'value'   => $filename,
-                    'compare' => 'LIKE'
-                ]
-            ]
-        ];
-
-        $query = new WP_Query($args);
-        if (!$query->have_posts()) return false;
-
-        $source_size = file_exists($source_path) ? filesize($source_path) : 0;
-
-        foreach ($query->posts as $attachment) {
-            $existing_path = get_attached_file($attachment->ID);
-            if (file_exists($existing_path) && filesize($existing_path) === $source_size) {
-                return $attachment->ID;
-            }
-        }
-
-        return false;
-    }
-
-
     private function process_batch($paged, $per_page, $batch) {
         global $wpdb;
         $batch_offset = ($batch - 1) * 200;
@@ -354,7 +357,7 @@ class Building_Featured_Image_Importer {
                     $upload_dir = wp_upload_dir();
                     $dest_path = $upload_dir['path'] . '/' . $filename;
 
-                    $existing_id = $this->find_existing_media_by_filename($filename, $source_path);
+                    $existing_id = $this->find_existing_media_by_hash($filename, $source_path);
                     if ($existing_id) {
                         set_post_thumbnail($post->ID, $existing_id);
                         update_post_meta($post->ID, 'assigned_featured_image_log', [
