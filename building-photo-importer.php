@@ -99,7 +99,7 @@ class Building_Featured_Image_Importer {
         echo "<div class='wrap'><h1>Assignment Log</h1>";
         global $wpdb;
 
-        // Manual image selector
+        // Handle manual image assignment
         if (isset($_GET['set_image']) && isset($_GET['post'])) {
             $pid = intval($_GET['post']);
             $image_pid = intval($_GET['set_image']);
@@ -114,9 +114,7 @@ class Building_Featured_Image_Importer {
                 $backup_path = $original_path . '_backup';
                 $source_path = file_exists($backup_path) ? $backup_path : (file_exists($original_path) ? $original_path : '');
 
-                if (!$source_path || !file_exists($source_path)) {
-                    echo "<div class='error'><p>❌ Image file not found.</p></div>";
-                } else {
+                if ($source_path && file_exists($source_path)) {
                     $upload_dir = wp_upload_dir();
                     $dest_path = $upload_dir['path'] . '/' . $filename;
 
@@ -165,8 +163,6 @@ class Building_Featured_Image_Importer {
                             ]);
 
                             echo "<div class='updated'><p>✅ Image manually assigned for Building ID {$pid}.</p></div>";
-                        } else {
-                            echo "<div class='error'><p>❌ Failed to copy image.</p></div>";
                         }
                     }
                 }
