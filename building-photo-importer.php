@@ -13,6 +13,9 @@ class Building_Featured_Image_Importer {
     public function __construct() {
         add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_scripts']);
+        add_action('wp_ajax_search_buildings', [$this, 'ajax_search_buildings']);
+        add_action('wp_ajax_get_building_images', [$this, 'ajax_get_building_images']);
+        add_action('wp_ajax_import_building_image', [$this, 'ajax_import_building_image']);
     }
 
     public function add_admin_menu() {
@@ -23,6 +26,15 @@ class Building_Featured_Image_Importer {
             'building-image-importer',
             [$this, 'importer_page'],
             'dashicons-format-image'
+        );
+
+        add_submenu_page(
+            'building-image-importer',
+            'Single Building Import',
+            'Single Building Import',
+            'manage_options',
+            'building-single-import',
+            [$this, 'single_import_page']
         );
 
         add_submenu_page(
@@ -49,6 +61,26 @@ class Building_Featured_Image_Importer {
                 'ajaxUrl'     => admin_url('admin-ajax.php')
             ]);
         }
+
+        if (isset($_GET['page']) && $_GET['page'] === 'building-single-import') {
+            wp_enqueue_style(
+                'building-single-import-css',
+                plugin_dir_url(__FILE__) . 'single-import.css',
+                [],
+                '1.0'
+            );
+            wp_enqueue_script(
+                'building-single-import-js',
+                plugin_dir_url(__FILE__) . 'single-import.js',
+                ['jquery'],
+                '1.0',
+                true
+            );
+            wp_localize_script('building-single-import-js', 'BuildingSingleImport', [
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'nonce'   => wp_create_nonce('building_single_import')
+            ]);
+        }
     }
 
     public function importer_page() {
@@ -61,6 +93,32 @@ class Building_Featured_Image_Importer {
 
         $this->process_batch($paged, $per_page, $batch);
         echo "</div>";
+    }
+
+    public function single_import_page() {
+        ?>
+        <div class='wrap'>
+            <h1>Single Building Import</h1>
+            <p>Search for a building and import its photos from NextGEN Gallery.</p>
+
+            <div id="building-search-container">
+                <label for="building-search"><strong>Search Building:</strong></label>
+                <input type="text" id="building-search" class="regular-text" placeholder="Start typing building name..." autocomplete="off">
+                <div id="building-search-results"></div>
+            </div>
+
+            <div id="building-details" style="display: none;">
+                <h2 id="building-title"></h2>
+                <div id="building-info"></div>
+                <div id="building-images-container">
+                    <h3>Available Images</h3>
+                    <div id="building-images"></div>
+                </div>
+            </div>
+
+            <div id="import-status"></div>
+        </div>
+        <?php
     }
 
     private function find_existing_media_by_hash($filename, $source_path) {
@@ -288,6 +346,184 @@ class Building_Featured_Image_Importer {
         echo "</div>";
     }
 
+
+    public function ajax_search_buildings() {
+        check_ajax_referer('building_single_import', 'nonce');
+
+        $search = isset($_POST['search']) ? sanitize_text_field($_POST['search']) : '';
+        if (strlen($search) < 2) {
+            wp_send_json_error(['message' => 'Search term too short']);
+        }
+
+        $args = [
+            'post_type'      => 'building',
+            'post_status'    => 'publish',
+            'posts_per_page' => 20,
+            's'              => $search,
+            'orderby'        => 'title',
+            'order'          => 'ASC'
+        ];
+
+        $query = new WP_Query($args);
+        $results = [];
+
+        if ($query->have_posts()) {
+            foreach ($query->posts as $post) {
+                $results[] = [
+                    'id'    => $post->ID,
+                    'title' => $post->post_title,
+                    'url'   => get_permalink($post->ID)
+                ];
+            }
+        }
+
+        wp_reset_postdata();
+        wp_send_json_success(['buildings' => $results]);
+    }
+
+    public function ajax_get_building_images() {
+        check_ajax_referer('building_single_import', 'nonce');
+
+        $building_id = isset($_POST['building_id']) ? intval($_POST['building_id']) : 0;
+        if (!$building_id) {
+            wp_send_json_error(['message' => 'Invalid building ID']);
+        }
+
+        $building = get_post($building_id);
+        if (!$building || $building->post_type !== 'building') {
+            wp_send_json_error(['message' => 'Building not found']);
+        }
+
+        global $wpdb;
+        $tag = function_exists('get_nggtag') ? get_nggtag($building_id, $building->post_title) : '';
+
+        $images = $wpdb->get_results($wpdb->prepare("
+            SELECT p.*, g.path
+            FROM {$wpdb->prefix}ngg_pictures p
+            INNER JOIN {$wpdb->prefix}ngg_gallery g ON p.galleryid = g.gid
+            INNER JOIN {$wpdb->prefix}term_relationships tr ON p.pid = tr.object_id
+            INNER JOIN {$wpdb->prefix}term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+            INNER JOIN {$wpdb->prefix}terms t ON tt.term_id = t.term_id
+            WHERE tt.taxonomy = 'ngg_tag' AND t.slug = %s
+        ", sanitize_title($tag)));
+
+        $image_data = [];
+        if ($images) {
+            foreach ($images as $img) {
+                $rel_path = preg_replace('#^wp-content/#', '', $img->path);
+                $src = content_url(trailingslashit($rel_path) . $img->filename);
+                $image_data[] = [
+                    'pid'         => $img->pid,
+                    'filename'    => $img->filename,
+                    'description' => $img->description,
+                    'alttext'     => $img->alttext,
+                    'src'         => $src
+                ];
+            }
+        }
+
+        $current_thumbnail_id = get_post_thumbnail_id($building_id);
+
+        wp_send_json_success([
+            'building_title'       => $building->post_title,
+            'building_id'          => $building_id,
+            'tag'                  => $tag,
+            'images'               => $image_data,
+            'has_thumbnail'        => !empty($current_thumbnail_id),
+            'current_thumbnail_id' => $current_thumbnail_id
+        ]);
+    }
+
+    public function ajax_import_building_image() {
+        check_ajax_referer('building_single_import', 'nonce');
+
+        $building_id = isset($_POST['building_id']) ? intval($_POST['building_id']) : 0;
+        $image_pid = isset($_POST['image_pid']) ? intval($_POST['image_pid']) : 0;
+
+        if (!$building_id || !$image_pid) {
+            wp_send_json_error(['message' => 'Invalid parameters']);
+        }
+
+        global $wpdb;
+        $ng_image = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}ngg_pictures WHERE pid = %d", $image_pid));
+        $gallery = $wpdb->get_row($wpdb->prepare("SELECT path FROM {$wpdb->prefix}ngg_gallery WHERE gid = %d", $ng_image->galleryid));
+
+        if (!$ng_image || !$gallery) {
+            wp_send_json_error(['message' => 'Image or gallery not found']);
+        }
+
+        $path = trailingslashit($gallery->path);
+        $filename = basename($ng_image->filename);
+        $original_path = ABSPATH . $path . $filename;
+        $backup_path = $original_path . '_backup';
+        $source_path = file_exists($backup_path) ? $backup_path : (file_exists($original_path) ? $original_path : '');
+
+        if (!$source_path || !file_exists($source_path)) {
+            wp_send_json_error(['message' => 'Source file not found']);
+        }
+
+        $upload_dir = wp_upload_dir();
+        $dest_path = $upload_dir['path'] . '/' . $filename;
+
+        $existing_id = $this->find_existing_media_by_hash($filename, $source_path);
+        if ($existing_id) {
+            set_post_thumbnail($building_id, $existing_id);
+            update_post_meta($building_id, 'assigned_featured_image_log', [
+                'attachment_id' => $existing_id,
+                'filename'      => $filename,
+                'tag'           => $ng_image->alttext,
+                'time'          => current_time('mysql')
+            ]);
+            wp_send_json_success([
+                'message'       => 'Reused existing image',
+                'attachment_id' => $existing_id,
+                'reused'        => true
+            ]);
+            return;
+        }
+
+        if (!copy($source_path, $dest_path)) {
+            wp_send_json_error(['message' => 'Failed to copy file']);
+        }
+
+        $caption = $ng_image->description;
+        if (stripos($caption, 'Photo') === 0) {
+            $caption .= ' — ' . $ng_image->alttext;
+        }
+
+        $attachment = [
+            'post_mime_type' => mime_content_type($dest_path),
+            'post_title'     => $caption,
+            'post_content'   => '',
+            'post_status'    => 'inherit'
+        ];
+
+        $attach_id = wp_insert_attachment($attachment, $dest_path, $building_id);
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+        $attach_data = wp_generate_attachment_metadata($attach_id, $dest_path);
+        wp_update_attachment_metadata($attach_id, $attach_data);
+
+        update_post_meta($attach_id, '_wp_attachment_image_alt', $caption);
+        wp_update_post([
+            'ID'           => $attach_id,
+            'post_excerpt' => $caption,
+            'post_content' => $caption
+        ]);
+
+        set_post_thumbnail($building_id, $attach_id);
+        update_post_meta($building_id, 'assigned_featured_image_log', [
+            'attachment_id' => $attach_id,
+            'filename'      => $filename,
+            'tag'           => $ng_image->alttext,
+            'time'          => current_time('mysql')
+        ]);
+
+        wp_send_json_success([
+            'message'       => 'Image imported successfully',
+            'attachment_id' => $attach_id,
+            'reused'        => false
+        ]);
+    }
 
     private function get_next_url() {
         $paged = isset($_GET['paged']) ? intval($_GET['paged']) : 1;
