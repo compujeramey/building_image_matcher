@@ -420,3 +420,67 @@ class Building_Featured_Image_Importer {
 }
 
 new Building_Featured_Image_Importer();
+add_action('admin_init', function () {
+    if (!current_user_can('manage_options')) return;
+
+    if (!isset($_GET['regen_thumb_id']) || !is_numeric($_GET['regen_thumb_id'])) {
+        return;
+    }
+
+    $image_id = intval($_GET['regen_thumb_id']);
+    $image = get_post($image_id);
+
+    echo "<div class='wrap'><h1>Regenerating thumbnails for Image ID {$image_id}</h1>";
+
+    if (!$image || $image->post_type !== 'attachment' || strpos($image->post_mime_type, 'image/') !== 0) {
+        echo "<p>❌ Invalid or non-image attachment.</p></div>";
+        exit;
+    }
+
+    $path = get_attached_file($image_id);
+    $meta = wp_get_attachment_metadata($image_id);
+
+    echo "<h2>📷 {$image->post_title} (ID {$image_id})</h2>";
+
+    if (!empty($meta['sizes']) && file_exists($path)) {
+        $dir = dirname($path);
+        $files = scandir($dir);
+
+        foreach ($meta['sizes'] as $size => $info) {
+            $expected = $info['file'];
+            $matched = false;
+
+            foreach ($files as $f) {
+                if (strcasecmp($f, $expected) === 0) {
+                    $full = $dir . DIRECTORY_SEPARATOR . $f;
+                    if (file_exists($full)) {
+                        if (@unlink($full)) {
+                            echo "<p>🗑 Deleted: <code>$full</code></p>";
+                        } else {
+                            echo "<p>❌ Failed to delete: <code>$full</code></p>";
+                            clearstatcache();
+                            echo "<p>Writable? " . (is_writable($full) ? 'Yes' : 'No') . "</p>";
+                        }
+                    }
+                    $matched = true;
+                    break;
+                }
+            }
+
+            if (!$matched) {
+                echo "<p>❌ Thumbnail not found: <code>$expected</code></p>";
+            }
+        }
+    }
+
+    if (file_exists($path)) {
+        $new_meta = wp_generate_attachment_metadata($image_id, $path);
+        wp_update_attachment_metadata($image_id, $new_meta);
+        echo "<p>✅ Regenerated metadata.</p>";
+    } else {
+        echo "<p>⚠️ Original image file not found at: <code>$path</code></p>";
+    }
+
+    echo "</div>";
+    exit;
+});
